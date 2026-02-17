@@ -161,6 +161,7 @@ summary = {
     "rows": sum(len(x["entries"]) for x in result),
     "tickers": len({x["ticker"] for x in result}),
     "changed_rows": sum(1 for r in rows if fivepercent._has_change(r)),
+    "total_rows": len(rows),
 }
 
 json.dumps({"summary": summary, "groups": result})

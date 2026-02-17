@@ -784,15 +784,21 @@ def rows_from_table(
 
         # prev snapshot (if present)
         shares_prev = None
+        shares_prev_raw = ""
         if colmap.get("shares_prev") is not None:
-            sp_raw = get("shares_prev")
-            if looks_like_numeric_int(sp_raw):
-                shares_prev = parse_int(sp_raw)
+            shares_prev_raw = get("shares_prev")
+            if looks_like_numeric_int(shares_prev_raw):
+                shares_prev = parse_int(shares_prev_raw)
 
         # Some rows use "-" for current shares when the holding is fully sold.
         # Keep these rows by treating current shares as zero, so change can be computed.
         if shares_owned is None and shares_prev is not None and shares_owned_raw in {"", "-"}:
             shares_owned = 0
+
+        # Some rows use "-" for previous shares when the holding is newly added.
+        # Treat that as zero so incoming holdings are detected as positive changes.
+        if shares_prev is None and shares_owned is not None and shares_prev_raw == "-":
+            shares_prev = 0
 
         # ticker: forward-fill across continuation rows and pages
         raw_ticker = get("ticker").upper()
@@ -831,10 +837,14 @@ def rows_from_table(
             pct_owned = sane_pct_owned(parse_pct(get("pct_owned")))
 
         pct_prev = None
+        pct_prev_raw = ""
         if colmap.get("pct_prev") is not None:
-            pp_raw = get("pct_prev")
-            if looks_like_numeric_pct(pp_raw):
-                pct_prev = sane_pct_owned(parse_pct(pp_raw))
+            pct_prev_raw = get("pct_prev")
+            if looks_like_numeric_pct(pct_prev_raw):
+                pct_prev = sane_pct_owned(parse_pct(pct_prev_raw))
+
+        if pct_prev is None and pct_owned is not None and pct_prev_raw == "-":
+            pct_prev = 0.0
 
         pct_change = None
         if colmap.get("pct_change") is not None:
@@ -922,6 +932,18 @@ def _has_change(e: HoldingRow) -> bool:
     return False
 
 
+def format_pct_change(value: Optional[float], shares_change_hint: Optional[int] = None) -> str:
+    if value is None:
+        return "-"
+    if abs(value) <= 1e-12:
+        if shares_change_hint is not None and shares_change_hint != 0:
+            return "+<0.01%" if shares_change_hint > 0 else "-<0.01%"
+        return "No Change"
+    if abs(value) < 0.005:
+        return "+<0.01%" if value > 0 else "-<0.01%"
+    return f"{value:+.2f}%"
+
+
 def print_grouped(rows: list[HoldingRow], only_changes: bool = True) -> None:
     def pick_group_pct(values: list[Optional[float]]) -> Optional[float]:
         """
@@ -997,7 +1019,7 @@ def print_grouped(rows: list[HoldingRow], only_changes: bool = True) -> None:
                     if e.pct_change is None:
                         print("  Percentage Change: -")
                     else:
-                        print(f"  Percentage Change: {e.pct_change:+.2f}%")
+                        print(f"  Percentage Change: {format_pct_change(e.pct_change, e.shares_change)}")
 
                 print()
 
@@ -1011,7 +1033,7 @@ def print_grouped(rows: list[HoldingRow], only_changes: bool = True) -> None:
                 print(f"  Shares Owned:      {total_shares:,}")
                 print(f"  Shares Change:     {'-' if total_change is None else f'{total_change:+,}'}")
                 print(f"  Percentage Owned:  {'-' if group_pct_owned is None else f'{group_pct_owned:.2f}%'}")
-                print(f"  Percentage Change: {'-' if group_pct_change is None else f'{group_pct_change:+.2f}%'}")
+                print(f"  Percentage Change: {format_pct_change(group_pct_change, total_change)}")
                 print()
 
             print("-" * 60)

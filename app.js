@@ -36,6 +36,7 @@ const I18N = {
 
     status_ready: "Ready. Drop a PDF to start.",
     status_need_pdf: "Please upload a PDF file.",
+    status_invalid_document: "This PDF does not look like a KSEI/OJK 5% ownership document, or no readable table was found.",
     status_parsing: "Parsing {file}...",
     status_done: "Done. Parsed {file}.",
     status_no_rows: "No changed rows were extracted from this PDF.",
@@ -65,6 +66,8 @@ const I18N = {
     label_pct_owned: "Percentage Owned",
     label_pct_change: "Percentage Change",
     total_heading: "TOTAL (all sekuritas for this owner)",
+    value_no_change: "No Change",
+    value_tiny_change: "Tiny ({sign}<0.01%)",
 
     error_parser_busy: "Parser is already running. Please wait for it to finish.",
     error_worker_crashed: "Parser worker crashed. Refresh and try again.",
@@ -84,6 +87,7 @@ const I18N = {
 
     status_ready: "Siap. Tarik file PDF untuk mulai.",
     status_need_pdf: "Silakan unggah file PDF.",
+    status_invalid_document: "PDF ini tidak terlihat seperti dokumen kepemilikan 5% KSEI/OJK, atau tabelnya tidak terbaca.",
     status_parsing: "Memproses {file}...",
     status_done: "Selesai. {file} berhasil diproses.",
     status_no_rows: "Tidak ada baris perubahan yang berhasil diekstrak dari PDF ini.",
@@ -113,6 +117,8 @@ const I18N = {
     label_pct_owned: "Persentase Kepemilikan",
     label_pct_change: "Perubahan Persentase",
     total_heading: "TOTAL (semua sekuritas untuk pemilik ini)",
+    value_no_change: "Tidak Berubah",
+    value_tiny_change: "Sangat kecil ({sign}<0.01%)",
 
     error_parser_busy: "Parser sedang berjalan. Tunggu sampai selesai.",
     error_worker_crashed: "Worker parser berhenti. Muat ulang lalu coba lagi.",
@@ -171,22 +177,47 @@ function formatSharesChange(value, dashIfZero = false) {
   return formatSignedInt(value);
 }
 
-function formatPct(value, signed = false) {
+function formatPct(value, signed = false, sharesChangeHint = null) {
   if (value === null || value === undefined) {
     return "-";
   }
   if (signed) {
+    if (Math.abs(value) <= 1e-12) {
+      if (sharesChangeHint !== null && sharesChangeHint !== undefined && sharesChangeHint !== 0) {
+        return t("value_tiny_change", { sign: sharesChangeHint > 0 ? "+" : "-" });
+      }
+      return t("value_no_change");
+    }
+    if (Math.abs(value) < 0.005) {
+      return t("value_tiny_change", { sign: value > 0 ? "+" : "-" });
+    }
     const sign = value >= 0 ? "+" : "-";
     return `${sign}${Math.abs(value).toFixed(2)}%`;
   }
   return `${value.toFixed(2)}%`;
 }
 
-function classForChange(value) {
-  if (value === null || value === undefined || value === 0) {
-    return "";
+function classForChange(value, fallbackValue = null) {
+  if (value === null || value === undefined) {
+    if (fallbackValue === null || fallbackValue === undefined || fallbackValue === 0) {
+      return "";
+    }
+    return fallbackValue > 0 ? "change-pos" : "change-neg";
+  }
+  if (value === 0) {
+    if (fallbackValue === null || fallbackValue === undefined || fallbackValue === 0) {
+      return "";
+    }
+    return fallbackValue > 0 ? "change-pos" : "change-neg";
   }
   return value > 0 ? "change-pos" : "change-neg";
+}
+
+function isLikelyInvalidDocumentError(message) {
+  if (!message) {
+    return false;
+  }
+  return /no\s*\/root object|eof marker|malformed pdf|is this really a pdf|pdfsyntaxerror|password|encrypted/i.test(message);
 }
 
 function renderLoadingText() {
@@ -396,8 +427,8 @@ function renderResults(groups) {
         pctChangeEl.textContent = "-";
       } else {
         pctOwnedEl.textContent = formatPct(entry.pct_owned, false);
-        pctChangeEl.textContent = formatPct(entry.pct_change, true);
-        pctChangeEl.className = `metric-pct-change ${classForChange(entry.pct_change)}`.trim();
+        pctChangeEl.textContent = formatPct(entry.pct_change, true, entry.shares_change);
+        pctChangeEl.className = `metric-pct-change ${classForChange(entry.pct_change, entry.shares_change)}`.trim();
       }
 
       entriesEl.appendChild(row);
@@ -411,7 +442,7 @@ function renderResults(groups) {
           <p><span>${t("label_shares_owned")}</span><strong>${formatInt(group.total.shares_owned)}</strong></p>
           <p><span>${t("label_shares_change")}</span><strong class="${classForChange(group.total.shares_change)}">${formatSharesChange(group.total.shares_change, true)}</strong></p>
           <p><span>${t("label_pct_owned")}</span><strong>${formatPct(group.total.pct_owned, false)}</strong></p>
-          <p><span>${t("label_pct_change")}</span><strong class="${classForChange(group.total.pct_change)}">${formatPct(group.total.pct_change, true)}</strong></p>
+          <p><span>${t("label_pct_change")}</span><strong class="${classForChange(group.total.pct_change, group.total.shares_change)}">${formatPct(group.total.pct_change, true, group.total.shares_change)}</strong></p>
         </div>
       `;
     }
@@ -442,7 +473,10 @@ async function handleFile(file) {
     if (!parsed.groups || parsed.groups.length === 0) {
       summaryEl.classList.add("hidden");
       resultsEl.classList.add("hidden");
-      setStatusKey("status_no_rows");
+      const totalRows = parsed.summary && Number.isFinite(parsed.summary.total_rows)
+        ? parsed.summary.total_rows
+        : 0;
+      setStatusKey(totalRows === 0 ? "status_invalid_document" : "status_no_rows");
       setDisclaimerEmphasis(true);
       return;
     }
@@ -455,7 +489,12 @@ async function handleFile(file) {
     console.error(err);
     summaryEl.classList.add("hidden");
     resultsEl.classList.add("hidden");
-    setStatusKey("status_failed", { error: err.message });
+    const msg = err && err.message ? err.message : t("error_unknown");
+    if (isLikelyInvalidDocumentError(msg)) {
+      setStatusKey("status_invalid_document");
+    } else {
+      setStatusKey("status_failed", { error: msg });
+    }
     setDisclaimerEmphasis(true);
   } finally {
     hideLoading();
