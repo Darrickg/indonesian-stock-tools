@@ -27,6 +27,6 @@ Then open:
 
 A workflow is included at `.github/workflows/pages.yml`.
 
-1. Push to `main`.
+1. Push to `master`.
 2. In repository settings, set **Pages > Build and deployment > Source** to **GitHub Actions**.
 3. The workflow deploys the site automatically.
