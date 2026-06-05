@@ -6,7 +6,7 @@ This repository consists of automation tools for me to analyize Indonesian stock
 
 - Users drag and drop a PDF on the page.
 - The site parses directly in-browser with a JavaScript worker (`parser-worker.js`) and PDF.js.
-- `fivepercent.py` is kept in the repo for future server-side use.
+- Browser and CLI parsing share the same header-driven JavaScript parser core.
 - Results are rendered as grouped cards (Ticker + Owner + Sekuritas + totals).
 
 No backend is required and uploaded files stay in the browser session.
