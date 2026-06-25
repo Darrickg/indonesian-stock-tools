@@ -91,6 +91,102 @@ const expected = {
       assert(!payload.groups.some((group) => group.owner === "SCB SG PVB"));
     },
   },
+  "peng-06-17-00012-lima-persen.xlsx": {
+    schemaCount: 1,
+    summary: {
+      groups: 44,
+      rows: 106,
+      tickers: 34,
+      changed_rows: 91,
+      total_rows: 3057,
+    },
+    verify(payload) {
+      const bapi = findGroup(payload, "BAPI", "HIMAWAN SUTANTO");
+      assert.strictEqual(bapi.entries.length, 2);
+      assert.strictEqual(bapi.entries[0].shares_owned, 2);
+      assert.strictEqual(bapi.total.shares_owned, 318808102);
+      assert.strictEqual(bapi.total.shares_change, -6336300);
+
+      const enrg = findGroup(payload, "ENRG", "PT MAYBANK SEKURITAS INDONESIA - REGISTRAR");
+      assert.strictEqual(enrg.total.shares_change, -42900);
+    },
+  },
+  "peng-06-18-00013-lima-persen.xlsx": {
+    schemaCount: 1,
+    summary: {
+      groups: 63,
+      rows: 157,
+      tickers: 54,
+      changed_rows: 124,
+      total_rows: 3059,
+    },
+    verify(payload) {
+      const ahap = findGroup(payload, "AHAP", "SENDRA GUNAWAN");
+      assert.strictEqual(ahap.entries[0].shares_change, 12000000);
+
+      const ceka = findGroup(payload, "CEKA", "SENTRATAMA NIAGA INDONESIA, PT");
+      assert.strictEqual(ceka.entries[0].shares_owned, 17600);
+      assert.strictEqual(ceka.total.shares_owned, 511771100);
+      assert.strictEqual(ceka.total.shares_change, 0);
+    },
+  },
+  "peng-06-19-00014-lima-persen.xlsx": {
+    schemaCount: 1,
+    summary: {
+      groups: 49,
+      rows: 148,
+      tickers: 42,
+      changed_rows: 100,
+      total_rows: 3061,
+    },
+    verify(payload) {
+      const abda = findGroup(payload, "ABDA", "OONA INDONESIA PTE LTD");
+      assert.strictEqual(abda.entries[0].shares_change, 400);
+      assert.strictEqual(abda.entries[0].pct_owned, 86.75);
+
+      const ceka = findGroup(payload, "CEKA", "SENTRATAMA NIAGA INDONESIA, PT");
+      assert.strictEqual(ceka.entries[0].shares_change, -17600);
+      assert.strictEqual(ceka.total.shares_change, -17600);
+    },
+  },
+  "peng-06-22-00015-lima-persen.xlsx": {
+    schemaCount: 1,
+    summary: {
+      groups: 41,
+      rows: 101,
+      tickers: 38,
+      changed_rows: 79,
+      total_rows: 3060,
+    },
+    verify(payload) {
+      const aisa = findGroup(payload, "AISA", "PT PANGAN SEJAHTERA INVESTAMA");
+      assert.strictEqual(aisa.entries[0].shares_change, 73300);
+
+      const enrg = findGroup(payload, "ENRG", "PT MAYBANK SEKURITAS INDONESIA - REGISTRAR");
+      assert.strictEqual(enrg.total.shares_owned, 1918260900);
+      assert.strictEqual(enrg.total.shares_change, -42);
+    },
+  },
+  "peng-06-23-00016-lima-persen.xlsx": {
+    schemaCount: 1,
+    summary: {
+      groups: 59,
+      rows: 186,
+      tickers: 48,
+      changed_rows: 111,
+      total_rows: 3166,
+    },
+    verify(payload) {
+      const arci = findGroup(payload, "ARCI", "PT RAJAWALI KAPITAL EMAS");
+      assert.strictEqual(arci.entries.length, 5);
+      assert.strictEqual(arci.total.shares_owned, 21109750000);
+      assert.strictEqual(arci.total.shares_change, 16605550000);
+      assert.strictEqual(arci.total.pct_owned, 83.64999999999999);
+
+      const aisa = findGroup(payload, "AISA", "PT PANGAN SEJAHTERA INVESTAMA");
+      assert.strictEqual(aisa.entries[0].shares_change, 1151300);
+    },
+  },
 };
 
 function findGroup(payload, ticker, owner) {
@@ -111,10 +207,15 @@ function validatePayload(name, payload) {
     for (const entry of group.entries) {
       assert(entry.sekuritas, `${name}: blank account for ${group.ticker}`);
       assert(Number.isFinite(entry.shares_owned), `${name}: invalid shares owned`);
+      assert(Number.isInteger(entry.shares_owned), `${name}: non-integer shares owned`);
       assert(entry.shares_owned >= 0, `${name}: negative shares owned`);
       assert(
         entry.shares_change === null || Number.isFinite(entry.shares_change),
         `${name}: invalid shares change`,
+      );
+      assert(
+        entry.shares_change === null || Number.isInteger(entry.shares_change),
+        `${name}: non-integer shares change`,
       );
       assert(
         entry.pct_owned === null ||
@@ -131,9 +232,9 @@ async function main() {
   assert(fs.existsSync(documentsDir), "documents directory is missing");
   const files = fs
     .readdirSync(documentsDir)
-    .filter((name) => name.toLowerCase().endsWith(".pdf"))
+    .filter((name) => /\.(pdf|xlsx)$/i.test(name))
     .sort();
-  assert(files.length > 0, "No PDF regression fixtures found in documents");
+  assert(files.length > 0, "No PDF or XLSX regression fixtures found in documents");
 
   for (const name of files) {
     const result = await extractPayload(path.join(documentsDir, name));

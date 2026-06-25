@@ -25,21 +25,21 @@ const I18N = {
   en: {
     hero_eyebrow: "Indonesia Stock Tools",
     hero_title: "IDX 5% Ownership Reader",
-    hero_subtitle: "Drop a KSEI/OJK 5% PDF and get clean, grouped ownership changes.",
-    upload_title: "Drag and drop your 5% PDF",
+    hero_subtitle: "Drop a KSEI/OJK 5% PDF or XLSX and get clean, grouped ownership changes.",
+    upload_title: "Drag and drop your 5% PDF or XLSX",
     upload_subtitle: "or click to choose a file",
-    upload_aria: "Upload a PDF file",
+    upload_aria: "Upload a PDF or XLSX file",
     lang_switch_aria: "Language",
     about_text: "Built by Darrick Gunawan",
     disclaimer_title: "Disclaimer",
     disclaimer_text: "Information shown may contain errors. If you find any issue, please contact me via the links below.",
 
-    status_ready: "Ready. Drop a PDF to start.",
-    status_need_pdf: "Please upload a PDF file.",
-    status_invalid_document: "This PDF does not look like a KSEI/OJK 5% ownership document, or no readable table was found.",
+    status_ready: "Ready. Drop a PDF or XLSX to start.",
+    status_need_pdf: "Please upload a PDF or XLSX file.",
+    status_invalid_document: "This file does not look like a KSEI/OJK 5% ownership document, or no readable table was found.",
     status_parsing: "Parsing {file}...",
     status_done: "Done. Parsed {file}.",
-    status_no_rows: "No changed rows were extracted from this PDF.",
+    status_no_rows: "No changed rows were extracted from this file.",
     status_failed: "Parsing failed: {error}",
 
     loading_preparing_title: "Preparing parser...",
@@ -54,6 +54,8 @@ const I18N = {
     progress_loading_parser_detail: "Preparing JavaScript parsing rules.",
     progress_parsing_pdf_title: "Parsing PDF...",
     progress_parsing_pdf_detail: "Analyzing holdings and changes.",
+    progress_parsing_xlsx_title: "Parsing XLSX...",
+    progress_parsing_xlsx_detail: "Reading sheet rows and ownership changes.",
 
     summary_owner_groups: "Owner Groups",
     summary_tickers: "Tickers",
@@ -76,21 +78,21 @@ const I18N = {
   id: {
     hero_eyebrow: "Indonesia Stock Tools",
     hero_title: "Pembaca Kepemilikan 5% IDX",
-    hero_subtitle: "Tarik dan lepaskan PDF 5% KSEI/OJK untuk melihat perubahan kepemilikan yang sudah dikelompokkan.",
-    upload_title: "Tarik dan lepaskan PDF 5% Anda",
+    hero_subtitle: "Tarik dan lepaskan PDF atau XLSX 5% KSEI/OJK untuk melihat perubahan kepemilikan yang sudah dikelompokkan.",
+    upload_title: "Tarik dan lepaskan PDF atau XLSX 5% Anda",
     upload_subtitle: "atau klik untuk memilih file",
-    upload_aria: "Unggah file PDF",
+    upload_aria: "Unggah file PDF atau XLSX",
     lang_switch_aria: "Bahasa",
     about_text: "Dibuat oleh Darrick Gunawan",
     disclaimer_title: "Disclaimer",
     disclaimer_text: "Informasi yang ditampilkan mungkin tidak akurat. Jika ada kesalahan, silakan hubungi saya melalui tautan di bawah.",
 
-    status_ready: "Siap. Tarik file PDF untuk mulai.",
-    status_need_pdf: "Silakan unggah file PDF.",
-    status_invalid_document: "PDF ini tidak terlihat seperti dokumen kepemilikan 5% KSEI/OJK, atau tabelnya tidak terbaca.",
+    status_ready: "Siap. Tarik file PDF atau XLSX untuk mulai.",
+    status_need_pdf: "Silakan unggah file PDF atau XLSX.",
+    status_invalid_document: "File ini tidak terlihat seperti dokumen kepemilikan 5% KSEI/OJK, atau tabelnya tidak terbaca.",
     status_parsing: "Memproses {file}...",
     status_done: "Selesai. {file} berhasil diproses.",
-    status_no_rows: "Tidak ada baris perubahan yang berhasil diekstrak dari PDF ini.",
+    status_no_rows: "Tidak ada baris perubahan yang berhasil diekstrak dari file ini.",
     status_failed: "Proses gagal: {error}",
 
     loading_preparing_title: "Menyiapkan parser...",
@@ -105,6 +107,8 @@ const I18N = {
     progress_loading_parser_detail: "Menyiapkan aturan parsing JavaScript.",
     progress_parsing_pdf_title: "Memproses PDF...",
     progress_parsing_pdf_detail: "Menganalisis kepemilikan dan perubahan.",
+    progress_parsing_xlsx_title: "Memproses XLSX...",
+    progress_parsing_xlsx_detail: "Membaca baris spreadsheet dan perubahan kepemilikan.",
 
     summary_owner_groups: "Grup Pemilik",
     summary_tickers: "Ticker",
@@ -217,7 +221,7 @@ function isLikelyInvalidDocumentError(message) {
   if (!message) {
     return false;
   }
-  return /no\s*\/root object|eof marker|malformed pdf|is this really a pdf|pdfsyntaxerror|password|encrypted/i.test(message);
+  return /no\s*\/root object|eof marker|malformed pdf|is this really a pdf|pdfsyntaxerror|password|encrypted|unsupported xlsx|zip directory|worksheet sheet1|ownership table header|ownership date sections/i.test(message);
 }
 
 function renderLoadingText() {
@@ -316,7 +320,7 @@ function ensureWorker() {
     return parserWorker;
   }
 
-  parserWorker = new Worker("./parser-worker.js?v=jsparser-11");
+  parserWorker = new Worker("./parser-worker.js?v=jsparser-12");
 
   parserWorker.onmessage = (event) => {
     const msg = event.data || {};
@@ -358,7 +362,24 @@ function ensureWorker() {
   return parserWorker;
 }
 
-async function parseFileWithWorker(file) {
+function supportedFileKind(file) {
+  if (!file || !file.name) {
+    return "";
+  }
+  const lowerName = file.name.toLowerCase();
+  if (file.type === "application/pdf" || lowerName.endsWith(".pdf")) {
+    return "pdf";
+  }
+  if (
+    file.type === "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" ||
+    lowerName.endsWith(".xlsx")
+  ) {
+    return "xlsx";
+  }
+  return "";
+}
+
+async function parseFileWithWorker(file, fileKind) {
   if (activeJob) {
     throw new Error(t("error_parser_busy"));
   }
@@ -369,7 +390,7 @@ async function parseFileWithWorker(file) {
 
   return await new Promise((resolve, reject) => {
     activeJob = { jobId, resolve, reject };
-    worker.postMessage({ type: "parse", jobId, buffer }, [buffer]);
+    worker.postMessage({ type: "parse", jobId, fileKind, buffer }, [buffer]);
   });
 }
 
@@ -454,10 +475,8 @@ function renderResults(groups) {
 }
 
 async function handleFile(file) {
-  const isPdf = Boolean(
-    file && (file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf"))
-  );
-  if (!isPdf) {
+  const fileKind = supportedFileKind(file);
+  if (!fileKind) {
     setStatusKey("status_need_pdf");
     return;
   }
@@ -467,7 +486,7 @@ async function handleFile(file) {
   setStatusKey("status_parsing", { file: file.name });
 
   try {
-    const parsed = await parseFileWithWorker(file);
+    const parsed = await parseFileWithWorker(file, fileKind);
     lastParsed = parsed;
 
     if (!parsed.groups || parsed.groups.length === 0) {

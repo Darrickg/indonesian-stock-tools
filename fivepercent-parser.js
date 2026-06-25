@@ -885,6 +885,301 @@ function rowsFromLines(lines, state) {
   return out;
 }
 
+function sheetValue(row, col) {
+  if (!row || !row.cells || col === undefined || col === null || col < 0) {
+    return "";
+  }
+  return cleanText(row.cells[col]);
+}
+
+function maxSheetColumn(rows) {
+  let max = -1;
+  for (const row of rows || []) {
+    if (!row || !row.cells) {
+      continue;
+    }
+    for (let i = row.cells.length - 1; i >= 0; i -= 1) {
+      if (row.cells[i] !== undefined && row.cells[i] !== "") {
+        max = Math.max(max, i);
+        break;
+      }
+    }
+  }
+  return max;
+}
+
+function findSheetHeaderRows(sheetRows) {
+  for (let i = 0; i < sheetRows.length - 1; i += 1) {
+    const row = sheetRows[i];
+    const next = sheetRows[i + 1];
+    const joined = [...(row.cells || []), ...(next.cells || [])]
+      .map((value) => norm(value))
+      .join(" ");
+
+    if (
+      joined.includes("KODE EFEK") &&
+      joined.includes("NAMA PEMEGANG SAHAM") &&
+      joined.includes("KEPEMILIKAN PER") &&
+      joined.includes("JUMLAH SAHAM") &&
+      joined.includes("PERSENTASE KEPEMILIKAN") &&
+      joined.includes("PERUBAHAN")
+    ) {
+      return { headerRow: row, subheaderRow: next, dataStartIndex: i + 2 };
+    }
+  }
+
+  throw new Error("Unsupported XLSX schema: no supported 5% ownership table header was found.");
+}
+
+function classifySheetTextHeader(value) {
+  const text = norm(value);
+  if (text === "NO") {
+    return "no";
+  }
+  if (text === "KODE EFEK") {
+    return "ticker";
+  }
+  if (text === "NAMA EMITEN") {
+    return "emiten";
+  }
+  if (text === "NAMA PEMEGANG REKENING EFEK") {
+    return "sekuritas";
+  }
+  if (text === "NAMA PEMEGANG SAHAM") {
+    return "owner";
+  }
+  if (text === "NAMA REKENING EFEK") {
+    return "rekening";
+  }
+  if (text === "KEBANGSAAN") {
+    return "country";
+  }
+  if (text === "DOMISILI") {
+    return "domicile";
+  }
+  if (text.includes("STATUS (LOKAL/ASING)")) {
+    return "status";
+  }
+  if (text === "PERUBAHAN") {
+    return "change";
+  }
+  return "";
+}
+
+function classifySheetNumericSubheader(value) {
+  const text = norm(value);
+  if (text.includes("JUMLAH SAHAM")) {
+    return "shares";
+  }
+  if (text.includes("SAHAM GABUNGAN")) {
+    return "total";
+  }
+  if (text.includes("PERSENTASE KEPEMILIKAN")) {
+    return "pct";
+  }
+  if (text.includes("STATUS KEPEMILIKAN")) {
+    return "ownership_status";
+  }
+  if (text.includes("BLOCKING REASON")) {
+    return "blocking_reason";
+  }
+  return "";
+}
+
+function buildSheetSchema(headerRow, subheaderRow) {
+  const maxCol = maxSheetColumn([headerRow, subheaderRow]);
+  const columns = {};
+  const ownershipSections = [];
+
+  for (let col = 0; col <= maxCol; col += 1) {
+    const headerText = sheetValue(headerRow, col);
+    const subheaderText = sheetValue(subheaderRow, col);
+    const textField = classifySheetTextHeader(headerText);
+
+    if (textField && !columns[textField]) {
+      columns[textField] = col;
+    }
+
+    if (norm(headerText).includes("KEPEMILIKAN PER")) {
+      const last = ownershipSections[ownershipSections.length - 1];
+      if (!last || last.label !== headerText) {
+        ownershipSections.push({ label: headerText, cols: [] });
+      }
+      ownershipSections[ownershipSections.length - 1].cols.push({ col, subheaderText });
+    }
+  }
+
+  if (ownershipSections.length < 2) {
+    throw new Error("Unsupported XLSX schema: ownership date sections were not recognized.");
+  }
+
+  const previous = ownershipSections[0];
+  const current = ownershipSections[1];
+
+  for (const section of [
+    { period: "prev", section: previous },
+    { period: "curr", section: current },
+  ]) {
+    for (const entry of section.section.cols) {
+      const numericField = classifySheetNumericSubheader(entry.subheaderText);
+      if (!numericField) {
+        continue;
+      }
+      if (numericField === "shares") {
+        columns[`shares_${section.period}`] = entry.col;
+      } else if (numericField === "total") {
+        columns[`shares_total_${section.period}`] = entry.col;
+      } else if (numericField === "pct") {
+        columns[`pct_${section.period}`] = entry.col;
+      } else {
+        columns[`${numericField}_${section.period}`] = entry.col;
+      }
+    }
+  }
+
+  const required = [
+    "ticker",
+    "owner",
+    "rekening",
+    "shares_prev",
+    "shares_total_prev",
+    "pct_prev",
+    "shares_curr",
+    "shares_total_curr",
+    "pct_curr",
+    "change",
+  ];
+  const missing = required.filter((field) => columns[field] === undefined);
+  if (missing.length) {
+    throw new Error(`Unsupported XLSX schema: missing ${missing.join(", ")}.`);
+  }
+
+  return {
+    columns,
+    displayRekeningAsSekuritas: columns.sekuritas === undefined,
+    schemaCount: 1,
+  };
+}
+
+function parseSheetShare(value) {
+  const raw = cleanText(value);
+  const normalized = normalizeNumber(raw);
+  if (!normalized || normalized === "-") {
+    return null;
+  }
+
+  if (/^[+-]?\d+\.\d+$/.test(normalized)) {
+    const numeric = Number(normalized);
+    if (!Number.isFinite(numeric)) {
+      return null;
+    }
+    if (!Number.isInteger(numeric) && Math.abs(numeric) < 1000) {
+      return Math.round(numeric * 1000);
+    }
+    return Math.round(numeric);
+  }
+
+  return looksLikeNumericInt(raw) ? parseShareInt(raw) : null;
+}
+
+function parseSheetPct(value) {
+  const raw = cleanText(value);
+  return looksLikeNumericPct(raw) ? parsePct(raw) : null;
+}
+
+function rowsFromSheetRows(sheetRows, state) {
+  const out = [];
+  const { headerRow, subheaderRow, dataStartIndex } = findSheetHeaderRows(sheetRows);
+  const schema = buildSheetSchema(headerRow, subheaderRow);
+  state.schemaCount += schema.schemaCount;
+
+  for (let i = dataStartIndex; i < sheetRows.length; i += 1) {
+    const row = sheetRows[i];
+    if (!row || !row.cells) {
+      continue;
+    }
+
+    const rawTicker = norm(sheetValue(row, schema.columns.ticker));
+    let ticker = "";
+    if (looksLikeTicker(rawTicker)) {
+      ticker = rawTicker;
+      state.lastTicker = ticker;
+    } else if (!rawTicker && state.lastTicker) {
+      ticker = state.lastTicker;
+    } else {
+      continue;
+    }
+
+    let ownerRaw = sheetValue(row, schema.columns.owner);
+    if (!ownerRaw) {
+      ownerRaw = state.lastOwnerByTicker.get(ticker) || "";
+    }
+    if (!ownerRaw) {
+      continue;
+    }
+    state.lastOwnerByTicker.set(ticker, ownerRaw);
+
+    let countryRaw = sheetValue(row, schema.columns.country);
+    const countryKey = `${ticker}\u0000${canonicalOwnerName(ownerRaw)}`;
+    if (countryRaw) {
+      state.lastCountryByOwner.set(countryKey, countryRaw);
+    } else {
+      countryRaw = state.lastCountryByOwner.get(countryKey) || "";
+    }
+
+    const sekuritasRaw = sheetValue(
+      row,
+      schema.displayRekeningAsSekuritas ? schema.columns.rekening : schema.columns.sekuritas,
+    );
+
+    const sharesOwnedRaw = sheetValue(row, schema.columns.shares_curr);
+    let sharesOwned = parseSheetShare(sharesOwnedRaw);
+    const sharesPrevRaw = sheetValue(row, schema.columns.shares_prev);
+    let sharesPrev = parseSheetShare(sharesPrevRaw);
+
+    if (sharesOwned === null && sharesPrev !== null && (sharesOwnedRaw === "" || sharesOwnedRaw === "-")) {
+      sharesOwned = 0;
+    }
+    if (sharesPrev === null && sharesOwned !== null && sharesPrevRaw === "-") {
+      sharesPrev = 0;
+    }
+
+    let sharesChange = parseSheetShare(sheetValue(row, schema.columns.change));
+    const computedSharesChange =
+      sharesPrev !== null && sharesOwned !== null ? sharesOwned - sharesPrev : null;
+    if (computedSharesChange !== null && sharesChange === null) {
+      sharesChange = computedSharesChange;
+    }
+
+    const pctOwned = sanePctOwned(parseSheetPct(sheetValue(row, schema.columns.pct_curr)));
+    const pctPrev = sanePctOwned(parseSheetPct(sheetValue(row, schema.columns.pct_prev)));
+    const pctChange =
+      pctOwned !== null && pctPrev !== null ? sanePctChange(pctOwned - pctPrev) : null;
+
+    const hasSignal = [sharesOwned, sharesPrev, sharesChange, pctOwned, pctPrev, pctChange].some(
+      (v) => v !== null && v !== undefined,
+    );
+    if (!hasSignal || sharesOwned === null) {
+      continue;
+    }
+
+    storeGroupHint(state, ticker, ownerRaw, pctOwned, pctChange, sharesChange);
+
+    out.push({
+      ticker,
+      owner_raw: ownerRaw,
+      sekuritas_raw: sekuritasRaw,
+      country_raw: countryRaw,
+      shares_owned: sharesOwned,
+      shares_change: sharesChange,
+      pct_owned: pctOwned,
+      pct_change: pctChange,
+    });
+  }
+
+  return out;
+}
+
 function normalizeOwnerKey(ownerRaw) {
   const display = firstLine(ownerRaw) || cleanText(ownerRaw);
 
@@ -1147,12 +1442,29 @@ async function extractHoldingsFromPdf(pdf) {
   };
 }
 
+function extractHoldingsFromSheetRows(sheetRows) {
+  const state = createParserState();
+  const rows = rowsFromSheetRows(sheetRows, state);
+
+  if (state.schemaCount === 0) {
+    throw new Error("No supported 5% ownership table header was found.");
+  }
+
+  return {
+    rows,
+    groupHints: state.groupHints,
+    schemaCount: state.schemaCount,
+  };
+}
+
 return Object.freeze({
   buildLinesFromTextContent,
   buildPayload,
   createParserState,
   discoverHeaderSchemas,
   extractHoldingsFromPdf,
+  extractHoldingsFromSheetRows,
   rowsFromLines,
+  rowsFromSheetRows,
 });
 });

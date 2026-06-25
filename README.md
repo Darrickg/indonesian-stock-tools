@@ -1,11 +1,11 @@
 # Indonesian Stock Tools Web App
 
-This repository consists of automation tools for me to analyize Indonesian stocks. It's also published on GitHub pages for anyone to use. Right now it only has a parser for IDX's 5% Ownership Docuemnt, but I plan to add more things in the future.
+This repository consists of automation tools for me to analyize Indonesian stocks. It's also published on GitHub pages for anyone to use. Right now it has a parser for IDX's 5% Ownership Document in both the older PDF format and the newer XLSX format, but I plan to add more things in the future.
 
 ## How it works
 
-- Users drag and drop a PDF on the page.
-- The site parses directly in-browser with a JavaScript worker (`parser-worker.js`) and PDF.js.
+- Users drag and drop a PDF or XLSX on the page.
+- The site parses directly in-browser with a JavaScript worker (`parser-worker.js`), PDF.js for PDFs, and a small local XLSX reader for spreadsheets.
 - Browser and CLI parsing share the same header-driven JavaScript parser core.
 - Results are rendered as grouped cards (Ticker + Owner + Sekuritas + totals).
 

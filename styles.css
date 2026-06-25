@@ -122,7 +122,7 @@ body {
 }
 
 .upload-icon {
-  width: 60px;
+  width: 82px;
   height: 60px;
   border-radius: 16px;
   display: inline-grid;
@@ -130,7 +130,7 @@ body {
   margin-bottom: 0.8rem;
   font-family: "IBM Plex Mono", monospace;
   font-weight: 600;
-  font-size: 0.96rem;
+  font-size: 0.78rem;
   color: #0f5f42;
   background: linear-gradient(145deg, #bde8d4, #d5f2e4);
 }

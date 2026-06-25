@@ -4,8 +4,20 @@ const fs = require("fs");
 const path = require("path");
 const pdfjsLib = require("pdfjs-dist/legacy/build/pdf.js");
 const parser = require("./fivepercent-parser.js");
+const xlsx = require("./fivepercent-xlsx.js");
 
-async function extractPayload(pdfPath) {
+function fileKindForPath(filePath) {
+  const lower = filePath.toLowerCase();
+  if (lower.endsWith(".pdf")) {
+    return "pdf";
+  }
+  if (lower.endsWith(".xlsx")) {
+    return "xlsx";
+  }
+  return "";
+}
+
+async function extractPdfPayload(pdfPath) {
   const loadingTask = pdfjsLib.getDocument({
     data: new Uint8Array(fs.readFileSync(pdfPath)),
     disableWorker: true,
@@ -27,6 +39,29 @@ async function extractPayload(pdfPath) {
   } finally {
     await loadingTask.destroy();
   }
+}
+
+async function extractXlsxPayload(xlsxPath) {
+  const workbook = await xlsx.readWorkbook(fs.readFileSync(xlsxPath));
+  const parsed = parser.extractHoldingsFromSheetRows(workbook.rows);
+  if (!parsed.rows.length) {
+    throw new Error("No ownership rows were extracted from this spreadsheet.");
+  }
+  return {
+    ...parsed,
+    payload: parser.buildPayload(parsed.rows, parsed.groupHints),
+  };
+}
+
+async function extractPayload(filePath) {
+  const fileKind = fileKindForPath(filePath);
+  if (fileKind === "xlsx") {
+    return await extractXlsxPayload(filePath);
+  }
+  if (fileKind === "pdf") {
+    return await extractPdfPayload(filePath);
+  }
+  throw new Error("Unsupported file type. Provide a PDF or XLSX file.");
 }
 
 function formatInt(value) {
@@ -101,13 +136,13 @@ function printPayload(payload) {
   }
 }
 
-function pickPdfPath(inputPath) {
+function pickInputPath(inputPath) {
   if (inputPath) {
     const full = path.resolve(inputPath);
     if (fs.existsSync(full) && fs.statSync(full).isDirectory()) {
       const files = fs
         .readdirSync(full)
-        .filter((name) => name.toLowerCase().endsWith(".pdf"))
+        .filter((name) => fileKindForPath(name))
         .map((name) => path.join(full, name))
         .sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs);
       return files[0] || null;
@@ -121,21 +156,21 @@ function pickPdfPath(inputPath) {
   }
   const files = fs
     .readdirSync(documentsDir)
-    .filter((name) => name.toLowerCase().endsWith(".pdf"))
+    .filter((name) => fileKindForPath(name))
     .map((name) => path.join(documentsDir, name))
     .sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs);
   return files[0] || null;
 }
 
 async function main() {
-  const pdfPath = pickPdfPath(process.argv[2]);
-  if (!pdfPath || !fs.existsSync(pdfPath) || !fs.statSync(pdfPath).isFile()) {
-    console.error("No PDF found. Provide a file path or place a PDF in ./documents.");
+  const inputPath = pickInputPath(process.argv[2]);
+  if (!inputPath || !fs.existsSync(inputPath) || !fs.statSync(inputPath).isFile()) {
+    console.error("No PDF or XLSX found. Provide a file path or place one in ./documents.");
     process.exitCode = 2;
     return;
   }
 
-  const { payload } = await extractPayload(pdfPath);
+  const { payload } = await extractPayload(inputPath);
   printPayload(payload);
 }
 

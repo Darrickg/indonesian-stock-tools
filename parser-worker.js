@@ -1,22 +1,39 @@
 let parserReady = false;
+let pdfReady = false;
+let xlsxReady = false;
 
 function postProgress(jobId, titleKey, detailKey) {
   self.postMessage({ type: "progress", jobId, titleKey, detailKey });
 }
 
-async function ensureRuntime(jobId) {
-  if (parserReady) {
+function ensureSharedParser() {
+  if (!self.FivePercentParser) {
+    importScripts("./fivepercent-parser.js?v=jsparser-12");
+  }
+  if (!self.FivePercentParser) {
+    throw new Error("Could not load the 5% ownership parser.");
+  }
+  parserReady = true;
+}
+
+function ensureXlsxParser() {
+  if (!self.FivePercentXlsx) {
+    importScripts("./fivepercent-xlsx.js?v=jsparser-12");
+  }
+  if (!self.FivePercentXlsx || typeof self.FivePercentXlsx.readWorkbook !== "function") {
+    throw new Error("Could not load the XLSX parser.");
+  }
+  xlsxReady = true;
+}
+
+function ensurePdfRuntime(jobId) {
+  if (pdfReady) {
     return;
   }
-
   postProgress(jobId, "progress_loading_runtime_title", "progress_loading_runtime_detail");
 
   if (typeof self.window === "undefined") {
     self.window = self;
-  }
-
-  if (!self.FivePercentParser) {
-    importScripts("./fivepercent-parser.js?v=jsparser-11");
   }
 
   if (!self.pdfjsLib) {
@@ -25,9 +42,6 @@ async function ensureRuntime(jobId) {
 
   if (!self.pdfjsLib || typeof self.pdfjsLib.getDocument !== "function") {
     throw new Error("Could not load PDF.js runtime in browser worker.");
-  }
-  if (!self.FivePercentParser) {
-    throw new Error("Could not load the 5% ownership parser.");
   }
 
   if (!self.pdfjsWorker) {
@@ -42,10 +56,24 @@ async function ensureRuntime(jobId) {
   }
 
   postProgress(jobId, "progress_loading_parser_title", "progress_loading_parser_detail");
-  parserReady = true;
+  pdfReady = true;
 }
 
-async function parseBuffer(jobId, buffer) {
+async function ensureRuntime(jobId, fileKind) {
+  ensureSharedParser();
+
+  if (fileKind === "xlsx") {
+    if (!xlsxReady) {
+      postProgress(jobId, "progress_loading_parser_title", "progress_loading_parser_detail");
+      ensureXlsxParser();
+    }
+    return;
+  }
+
+  ensurePdfRuntime(jobId);
+}
+
+async function parsePdfBuffer(jobId, buffer) {
   postProgress(jobId, "progress_parsing_pdf_title", "progress_parsing_pdf_detail");
 
   const loadingTask = self.pdfjsLib.getDocument({
@@ -68,6 +96,18 @@ async function parseBuffer(jobId, buffer) {
   }
 }
 
+async function parseXlsxBuffer(jobId, buffer) {
+  postProgress(jobId, "progress_parsing_xlsx_title", "progress_parsing_xlsx_detail");
+
+  const workbook = await self.FivePercentXlsx.readWorkbook(buffer);
+  const { rows, groupHints } =
+    self.FivePercentParser.extractHoldingsFromSheetRows(workbook.rows);
+  if (!rows.length) {
+    throw new Error("No ownership rows were extracted from this spreadsheet.");
+  }
+  return self.FivePercentParser.buildPayload(rows, groupHints);
+}
+
 self.onmessage = async (event) => {
   const msg = event.data || {};
   if (msg.type !== "parse") {
@@ -75,9 +115,13 @@ self.onmessage = async (event) => {
   }
 
   const jobId = msg.jobId ?? 0;
+  const fileKind = msg.fileKind === "xlsx" ? "xlsx" : "pdf";
   try {
-    await ensureRuntime(jobId);
-    const payload = await parseBuffer(jobId, msg.buffer);
+    await ensureRuntime(jobId, fileKind);
+    const payload =
+      fileKind === "xlsx"
+        ? await parseXlsxBuffer(jobId, msg.buffer)
+        : await parsePdfBuffer(jobId, msg.buffer);
     self.postMessage({ type: "result", jobId, payload });
   } catch (err) {
     self.postMessage({
